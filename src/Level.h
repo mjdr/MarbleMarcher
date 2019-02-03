@@ -17,12 +17,13 @@
 #pragma once
 #include <Eigen/Dense>
 
-static const int num_levels = 15;
+static const int num_levels = 24;
 static const int num_fractal_params = 9;
 typedef Eigen::Matrix<float, num_fractal_params, 1> FractalParams;
 
 class Level {
 public:
+  Level() {}
   Level(float s, float a1, float a2,
         const Eigen::Vector3f& v,
         const Eigen::Vector3f& c,

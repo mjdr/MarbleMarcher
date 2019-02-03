@@ -20,13 +20,14 @@
 #include "Scores.h"
 
 static const float pi = 3.14159265359f;
-int mouse_setting = 0;
-bool music_on = true;
+static const int num_level_pages = 1 + (num_levels - 1) / Overlays::LEVELS_PER_PAGE;
+Settings game_settings;
 
 Overlays::Overlays(const sf::Font* _font, const sf::Font* _font_mono) :
   font(_font),
   font_mono(_font_mono),
   draw_scale(1.0f),
+  level_page(0),
   top_level(true) {
   memset(all_hover, 0, sizeof(all_hover));
   buff_hover.loadFromFile(menu_hover_wav);
@@ -61,7 +62,7 @@ void Overlays::UpdateMenu(float mouse_x, float mouse_y) {
   MakeText("Controls", 80, 370, 60, sf::Color::White, all_text[CONTROLS]);
   MakeText("Screen Saver", 80, 440, 60, sf::Color::White, all_text[SCREEN_SAVER]);
   MakeText("Exit", 80, 510, 60, sf::Color::White, all_text[EXIT]);
-  MakeText("\xA9""2019 CodeParade 1.0.4\nMusic by PettyTheft", 16, 652, 32, sf::Color::White, all_text[CREDITS], true);
+  MakeText("\xA9""2019 CodeParade 1.1.0\nMusic by PettyTheft", 16, 652, 32, sf::Color::White, all_text[CREDITS], true);
   all_text[TITLE].setLineSpacing(0.76f);
   all_text[CREDITS].setLineSpacing(0.9f);
 
@@ -85,15 +86,32 @@ void Overlays::UpdateControls(float mouse_x, float mouse_y) {
 
 void Overlays::UpdateLevels(float mouse_x, float mouse_y) {
   //Update text boxes
-  for (int i = 0; i < num_levels; ++i) {
-    const float y = 80.0f + float(i/3) * 120.0f;
-    const float x = 240.0f + float(i%3) * 400.0f;
-    const char* txt = high_scores.HasUnlocked(i) ? all_levels[i].txt : "???";
-    MakeText(txt, x, y, 32, sf::Color::White, all_text[i + L0]);
-    const sf::FloatRect text_bounds = all_text[i + L0].getLocalBounds();
-    all_text[i + L0].setOrigin(text_bounds.width / 2, text_bounds.height / 2);
+  const int page_start = level_page * LEVELS_PER_PAGE;
+  const int page_end = page_start + LEVELS_PER_PAGE;
+  for (int i = page_start; i < page_end; ++i) {
+    const int j = i % LEVELS_PER_PAGE;
+    if (i < num_levels) {
+      const float y = 80.0f + float(j / 3) * 120.0f;
+      const float x = 240.0f + float(j % 3) * 400.0f;
+      const char* txt = high_scores.HasUnlocked(i) ? all_levels[i].txt : "???";
+      MakeText(txt, x, y, 32, sf::Color::White, all_text[j + L0]);
+      const sf::FloatRect text_bounds = all_text[j + L0].getLocalBounds();
+      all_text[j + L0].setOrigin(text_bounds.width / 2, text_bounds.height / 2);
+    } else {
+      all_text[j + L0] = sf::Text();
+    }
+  }
+  if (level_page > 0) {
+    MakeText("<", 540, 652, 48, sf::Color::White, all_text[PREV]);
+  } else {
+    all_text[PREV] = sf::Text();
   }
   MakeText("Back", 590, 660, 40, sf::Color::White, all_text[BACK2]);
+  if (level_page < num_level_pages - 1) {
+    MakeText(">", 732, 652, 48, sf::Color::White, all_text[NEXT]);
+  } else {
+    all_text[NEXT] = sf::Text();
+  }
 
   //Check if mouse intersects anything
   UpdateHover(L0, BACK2, mouse_x, mouse_y);
@@ -107,14 +125,14 @@ void Overlays::UpdatePaused(float mouse_x, float mouse_y) {
   MakeText("Quit", 845, 356, 40, sf::Color::White, all_text[QUIT]);
 
   //Update music setting
-  const char* music_txt = (music_on ? "Music:  On" : "Music:  Off");
+  const char* music_txt = (game_settings.mute ? "Music:  Off" : "Music:  On");
   MakeText(music_txt, 410, 500, 40, sf::Color::White, all_text[MUSIC]);
 
   //Update mouse sensitivity setting
   const char* mouse_txt = "Mouse Sensitivity:  High";
-  if (mouse_setting == 1) {
+  if (game_settings.mouse_sensitivity == 1) {
     mouse_txt = "Mouse Sensitivity:  Medium";
-  } else if (mouse_setting == 2) {
+  } else if (game_settings.mouse_sensitivity == 2) {
     mouse_txt = "Mouse Sensitivity:  Low";
   }
   MakeText(mouse_txt, 410, 550, 40, sf::Color::White, all_text[MOUSE]);
@@ -221,14 +239,32 @@ void Overlays::DrawArrow(sf::RenderWindow& window, const sf::Vector3f& v3) {
 
 void Overlays::DrawCredits(sf::RenderWindow& window, bool fullrun, int t) {
   const char* txt =
-    "Congratulations, you beat all the levels!\n\n\n\n"
-    "I hope it was as fun to play this demo as\n"
-    "it was to make it. For more information about\n"
-    "this game and other projects, check out my\n"
-    "YouTube channel \"CodeParade\".\n\n"
+    "  Congratulations, you beat all the levels!\n\n\n\n"
+    "As a reward, cheats have been unlocked!\n"
+    "Activate them with the F1 key during gameplay.\n\n"
     "Thanks for playing!";
   sf::Text text;
-  MakeText(txt, 50, 100, 44, sf::Color::White, text);
+  MakeText(txt, 100, 100, 44, sf::Color::White, text);
+  text.setLineSpacing(1.3f);
+  window.draw(text);
+
+  if (fullrun) {
+    sf::Text time_txt;
+    MakeTime(t, 640, 226, 72, sf::Color::White, time_txt);
+    const sf::FloatRect text_bounds = time_txt.getLocalBounds();
+    time_txt.setOrigin(text_bounds.width / 2, text_bounds.height / 2);
+    window.draw(time_txt);
+  }
+}
+
+void Overlays::DrawMidPoint(sf::RenderWindow& window, bool fullrun, int t) {
+  const char* txt =
+    "            You've done well so far.\n\n\n\n"
+    "      But this is only the beginning.\n"
+    "If you need a quick break, take it now.\n"
+    "The challenge levels are coming up...";
+  sf::Text text;
+  MakeText(txt, 205, 100, 44, sf::Color::White, text);
   text.setLineSpacing(1.3f);
   window.draw(text);
 
@@ -247,11 +283,14 @@ void Overlays::DrawLevels(sf::RenderWindow& window) {
     window.draw(all_text[i]);
   }
   //Draw the times
-  for (int i = 0; i < num_levels; ++i) {
-    if (high_scores.HasCompleted(i)) {
+  const int page_start = level_page * LEVELS_PER_PAGE;
+  const int page_end = page_start + LEVELS_PER_PAGE;
+  for (int i = page_start; i < page_end; ++i) {
+    if (i < num_levels && high_scores.HasCompleted(i)) {
       sf::Text text;
-      const float y = 98.0f + float(i / 3) * 120.0f;
-      const float x = 148.0f + float(i % 3) * 400.0f;
+      const int j = i % LEVELS_PER_PAGE;
+      const float y = 98.0f + float(j / 3) * 120.0f;
+      const float x = 148.0f + float(j % 3) * 400.0f;
       MakeTime(high_scores.Get(i), x, y, 48, sf::Color(64, 255, 64), text);
       window.draw(text);
     }
@@ -261,6 +300,27 @@ void Overlays::DrawLevels(sf::RenderWindow& window) {
 void Overlays::DrawSumTime(sf::RenderWindow& window, int t) {
   sf::Text text;
   MakeTime(t, 10, 680, 32, sf::Color::White, text);
+  window.draw(text);
+}
+
+void Overlays::DrawCheatsEnabled(sf::RenderWindow& window) {
+  sf::Text text;
+  MakeText("Cheats Enabled", 10, 680, 32, sf::Color::White, text);
+  window.draw(text);
+}
+
+void Overlays::DrawCheats(sf::RenderWindow& window) {
+  sf::Text text;
+  const char* txt =
+    "[ C ] Color change\n"
+    "[ F ] Free camera\n"
+    "[ G ] Gravity strength\n"
+    "[ H ] Hyperspeed toggle\n"
+    "[ I ] Ignore goal\n"
+    "[ M ] Motion disable\n"
+    "[ P ] Planet toggle\n"
+    "[ Z ] Zoom to scale\n";
+  MakeText(txt, 460, 160, 32, sf::Color::White, text, true);
   window.draw(text);
 }
 

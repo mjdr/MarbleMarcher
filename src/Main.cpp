@@ -42,6 +42,7 @@
 static const float mouse_sensitivity = 0.005f;
 static const float wheel_sensitivity = 0.2f;
 static const float music_vol = 75.0f;
+static const float target_fps = 60.0f;
 
 //Game modes
 enum GameMode {
@@ -51,18 +52,19 @@ enum GameMode {
   SCREEN_SAVER,
   CONTROLS,
   LEVELS,
-  CREDITS
+  CREDITS,
+  MIDPOINT
 };
 
 //Global variables
 static sf::Vector2i mouse_pos;
 static bool all_keys[sf::Keyboard::KeyCount] = { 0 };
-static bool lock_mouse = false;
 static bool mouse_clicked = false;
+static bool show_cheats = false;
 static GameMode game_mode = MAIN_MENU;
 
 float GetVol() {
-  if (!music_on) {
+  if (game_settings.mute) {
     return 0.0f;
   } else if (game_mode == PAUSED) {
     return music_vol / 4;
@@ -80,7 +82,15 @@ void LockMouse(sf::RenderWindow& window) {
 void UnlockMouse(sf::RenderWindow& window) {
   window.setMouseCursorVisible(true);
 }
-int dirExists(const char *path) {
+
+void PauseGame(sf::RenderWindow& window, Scene& scene) {
+  game_mode = PAUSED;
+  scene.GetCurMusic().setVolume(GetVol());
+  UnlockMouse(window);
+  scene.SetExposure(0.5f);
+}
+
+int DirExists(const char *path) {
   struct stat info;
   if (stat(path, &info) != 0) {
     return 0;
@@ -129,12 +139,15 @@ int main(int argc, char *argv[]) {
   sf::Music menu_music;
   menu_music.openFromFile(menu_ogg);
   menu_music.setLoop(true);
-  sf::Music level1_music;
-  level1_music.openFromFile(level1_ogg);
-  level1_music.setLoop(true);
-  sf::Music level2_music;
-  level2_music.openFromFile(level2_ogg);
-  level2_music.setLoop(true);
+  sf::Music level_music[num_level_music];
+  level_music[0].openFromFile(level1_ogg);
+  level_music[0].setLoop(true);
+  level_music[1].openFromFile(level2_ogg);
+  level_music[1].setLoop(true);
+  level_music[2].openFromFile(level3_ogg);
+  level_music[2].setLoop(true);
+  level_music[3].openFromFile(level4_ogg);
+  level_music[3].setLoop(true);
   sf::Music credits_music;
   credits_music.openFromFile(credits_ogg);
   credits_music.setLoop(true);
@@ -146,7 +159,7 @@ int main(int argc, char *argv[]) {
   const std::string save_dir = std::string(std::getenv("HOME")) + "/.MarbleMarcher";
 #endif
   
-  if (!dirExists(save_dir.c_str())) {
+  if (!DirExists(save_dir.c_str())) {
 #if defined(_WIN32)
     bool success = CreateDirectory(save_dir.c_str(), NULL) != 0 || GetLastError() == ERROR_ALREADY_EXISTS;
 #else
@@ -158,9 +171,11 @@ int main(int argc, char *argv[]) {
     }
   }
   const std::string save_file = save_dir + "/scores.bin";
+  const std::string settings_file = save_dir + "/settings.bin";
 
   //Load scores if available
   high_scores.Load(save_file);
+  game_settings.Load(settings_file);
 
   //Have user select the resolution
   SelectRes select_res(&font_mono);
@@ -206,10 +221,15 @@ int main(int argc, char *argv[]) {
   }
 
   //Create the fractal scene
-  Scene scene(&level1_music, &level2_music);
+  Scene scene(level_music);
   const sf::Glsl::Vec2 window_res((float)resolution->width, (float)resolution->height);
   shader.setUniform("iResolution", window_res);
   scene.Write(shader);
+
+  //Create screen rectangle
+  sf::RectangleShape rect;
+  rect.setSize(window_res);
+  rect.setPosition(0, 0);
 
   //Create the menus
   Overlays overlays(&font, &font_mono);
@@ -219,8 +239,8 @@ int main(int argc, char *argv[]) {
 
   //Main loop
   sf::Clock clock;
-  float smooth_fps = 60.0f;
-  int lag_ms = 0;
+  float smooth_fps = target_fps;
+  float lag_ms = 0.0f;
   while (window.isOpen()) {
     sf::Event event;
     float mouse_wheel = 0.0f;
@@ -228,6 +248,10 @@ int main(int argc, char *argv[]) {
       if (event.type == sf::Event::Closed) {
         window.close();
         break;
+      } else if (event.type == sf::Event::LostFocus) {
+        if (game_mode == PLAYING) {
+          PauseGame(window, scene);
+        }
       } else if (event.type == sf::Event::KeyPressed) {
         const sf::Keyboard::Key keycode = event.key.code;
         if (event.key.code < 0 || event.key.code >= sf::Keyboard::KeyCount) { continue; }
@@ -239,6 +263,11 @@ int main(int argc, char *argv[]) {
           credits_music.stop();
           menu_music.setVolume(GetVol());
           menu_music.play();
+        } else if (game_mode == MIDPOINT) {
+          game_mode = PLAYING;
+          scene.SetExposure(1.0f);
+          credits_music.stop();
+          scene.StartNextLevel();
         } else if (keycode == sf::Keyboard::Escape) {
           if (game_mode == MAIN_MENU) {
             window.close();
@@ -255,15 +284,33 @@ int main(int argc, char *argv[]) {
             scene.SetExposure(1.0f);
             LockMouse(window);
           } else if (game_mode == PLAYING) {
-            game_mode = PAUSED;
-            scene.GetCurMusic().setVolume(GetVol());
-            UnlockMouse(window);
-            scene.SetExposure(0.5f);
+            PauseGame(window, scene);
           }
         } else if (keycode == sf::Keyboard::R) {
           if (game_mode == PLAYING) {
             scene.ResetLevel();
           }
+        } else if (keycode == sf::Keyboard::F1) {
+          if (game_mode == PLAYING && high_scores.HasCompleted(num_levels - 1)) {
+            show_cheats = !show_cheats;
+            scene.EnbaleCheats();
+          }
+        } else if (keycode == sf::Keyboard::C) {
+          scene.Cheat_ColorChange();
+        } else if (keycode == sf::Keyboard::F) {
+          scene.Cheat_FreeCamera();
+        } else if (keycode == sf::Keyboard::G) {
+          scene.Cheat_Gravity();
+        } else if (keycode == sf::Keyboard::H) {
+          scene.Cheat_HyperSpeed();
+        } else if (keycode == sf::Keyboard::I) {
+          scene.Cheat_IgnoreGoal();
+        } else if (keycode == sf::Keyboard::M) {
+          scene.Cheat_Motion();
+        } else if (keycode == sf::Keyboard::P) {
+          scene.Cheat_Planet();
+        } else if (keycode == sf::Keyboard::Z) {
+          scene.Cheat_Zoom();
         }
         all_keys[keycode] = true;
       } else if (event.type == sf::Event::KeyReleased) {
@@ -287,6 +334,7 @@ int main(int argc, char *argv[]) {
               game_mode = CONTROLS;
             } else if (selected == Overlays::LEVELS) {
               game_mode = LEVELS;
+              overlays.GetLevelPage() = 0;
               scene.SetExposure(0.5f);
             } else if (selected == Overlays::SCREEN_SAVER) {
               game_mode = SCREEN_SAVER;
@@ -305,12 +353,17 @@ int main(int argc, char *argv[]) {
             if (selected == Overlays::BACK2) {
               game_mode = MAIN_MENU;
               scene.SetExposure(1.0f);
+            } else if (selected == Overlays::PREV) {
+              overlays.GetLevelPage() -= 1;
+            } else if (selected == Overlays::NEXT) {
+              overlays.GetLevelPage() += 1;
             } else if (selected >= Overlays::L0 && selected <= Overlays::L14) {
-              if (high_scores.HasUnlocked(selected - Overlays::L0)) {
+              const int level = selected - Overlays::L0 + overlays.GetLevelPage() * Overlays::LEVELS_PER_PAGE;
+              if (high_scores.HasUnlocked(level)) {
                 game_mode = PLAYING;
                 menu_music.stop();
                 scene.SetExposure(1.0f);
-                scene.StartSingle(selected - Overlays::L0);
+                scene.StartSingle(level);
                 scene.GetCurMusic().setVolume(GetVol());
                 scene.GetCurMusic().play();
                 LockMouse(window);
@@ -344,11 +397,12 @@ int main(int argc, char *argv[]) {
               menu_music.setVolume(GetVol());
               menu_music.play();
             } else if (selected == Overlays::MUSIC) {
-              music_on = !music_on;
-              level1_music.setVolume(GetVol());
-              level2_music.setVolume(GetVol());
+              game_settings.mute = !game_settings.mute;
+              for (int i = 0; i < num_level_music; ++i) {
+                level_music[i].setVolume(GetVol());
+              }
             } else if (selected == Overlays::MOUSE) {
-              mouse_setting = (mouse_setting + 1) % 3;
+              game_settings.mouse_sensitivity = (game_settings.mouse_sensitivity + 1) % 3;
             }
           }
         } else if (event.mouseButton.button == sf::Mouse::Right) {
@@ -374,6 +428,11 @@ int main(int argc, char *argv[]) {
       scene.StopAllMusic();
       scene.SetExposure(0.5f);
       credits_music.play();
+    } else if (scene.GetMode() == Scene::MIDPOINT && game_mode != MIDPOINT) {
+      game_mode = MIDPOINT;
+      scene.StopAllMusic();
+      scene.SetExposure(0.5f);
+      credits_music.play();
     }
 
     //Main game update
@@ -388,7 +447,7 @@ int main(int argc, char *argv[]) {
       overlays.UpdateLevels((float)mouse_pos.x, (float)mouse_pos.y);
     } else if (game_mode == SCREEN_SAVER) {
       scene.UpdateCamera();
-    } else if (game_mode == PLAYING || game_mode == CREDITS) {
+    } else if (game_mode == PLAYING || game_mode == CREDITS || game_mode == MIDPOINT) {
       //Collect keyboard input
       const float force_lr =
         (all_keys[sf::Keyboard::Left] || all_keys[sf::Keyboard::A] ? -1.0f : 0.0f) +
@@ -401,9 +460,9 @@ int main(int argc, char *argv[]) {
       const sf::Vector2i mouse_delta = mouse_pos - screen_center;
       sf::Mouse::setPosition(screen_center, window);
       float ms = mouse_sensitivity;
-      if (mouse_setting == 1) {
+      if (game_settings.mouse_sensitivity == 1) {
         ms *= 0.5f;
-      } else if (mouse_setting == 2) {
+      } else if (game_settings.mouse_sensitivity == 2) {
         ms *= 0.25f;
       }
       const float cam_lr = float(-mouse_delta.x) * ms;
@@ -418,9 +477,9 @@ int main(int argc, char *argv[]) {
     }
 
     bool skip_frame = false;
-    if (lag_ms >= 16) {
+    if (lag_ms >= 1000.0f / target_fps) {
       //If there is too much lag, just do another frame of physics and skip the draw
-      lag_ms -= 16;
+      lag_ms -= 1000.0f / target_fps;
       skip_frame = true;
     } else {
       //Update the shader values
@@ -429,9 +488,6 @@ int main(int argc, char *argv[]) {
       //Setup full-screen shader
       sf::RenderStates states = sf::RenderStates::Default;
       states.shader = &shader;
-      sf::RectangleShape rect;
-      rect.setSize(window_res);
-      rect.setPosition(0, 0);
 
       //Draw the fractal
       if (fullscreen) {
@@ -460,19 +516,34 @@ int main(int argc, char *argv[]) {
     } else if (game_mode == PLAYING) {
       if (scene.GetMode() == Scene::ORBIT && scene.GetMarble().x() < 998.0f) {
         overlays.DrawLevelDesc(window, scene.GetLevel());
-      } else if (scene.GetMode() == Scene::MARBLE) {
+      } else if (scene.GetMode() == Scene::MARBLE && !scene.IsFreeCamera()) {
         overlays.DrawArrow(window, scene.GetGoalDirection());
       }
-      overlays.DrawTimer(window, scene.GetCountdownTime(), scene.IsHighScore());
-      if (scene.IsFullRun()) {
+      if (!scene.HasCheats() || scene.GetCountdownTime() < 4 * 60) {
+        overlays.DrawTimer(window, scene.GetCountdownTime(), scene.IsHighScore());
+      }
+      if (!scene.HasCheats() && scene.IsFullRun() && !scene.IsFreeCamera()) {
         overlays.DrawSumTime(window, scene.GetSumTime());
+      }
+      if (scene.HasCheats() && !scene.IsFreeCamera()) {
+        overlays.DrawCheatsEnabled(window);
+      }
+      if (show_cheats) {
+        overlays.DrawCheats(window);
       }
     } else if (game_mode == PAUSED) {
       overlays.DrawPaused(window);
+      if (scene.HasCheats()) {
+        overlays.DrawCheatsEnabled(window);
+      }
     } else if (game_mode == CREDITS) {
       overlays.DrawCredits(window, scene.IsFullRun(), scene.GetSumTime());
+    } else if (game_mode == MIDPOINT) {
+      overlays.DrawMidPoint(window, scene.IsFullRun(), scene.GetSumTime());
     }
-    overlays.DrawFPS(window, int(smooth_fps + 0.5f));
+    if (!scene.IsFreeCamera()) {
+      overlays.DrawFPS(window, int(smooth_fps + 0.5f));
+    }
 
     if (!skip_frame) {
       //Finally display to the screen
@@ -481,24 +552,24 @@ int main(int argc, char *argv[]) {
       //If V-Sync is running higher than desired fps, slow down!
       const float s = clock.restart().asSeconds();
       if (s > 0.0f) {
-        smooth_fps = smooth_fps*0.9f + std::min(1.0f / s, 60.0f)*0.1f;
+        smooth_fps = smooth_fps*0.9f + std::min(1.0f / s, target_fps)*0.1f;
       }
-      const int time_diff_ms = int(16.66667f - s*1000.0f);
+      const float time_diff_ms = 1000.0f * (1.0f / target_fps - s);
       if (time_diff_ms > 0) {
-        sf::sleep(sf::milliseconds(time_diff_ms));
-        lag_ms = std::max(lag_ms - time_diff_ms, 0);
+        sf::sleep(sf::seconds(time_diff_ms / 1000.0f));
+        lag_ms = std::max(lag_ms - time_diff_ms, 0.0f);
       } else if (time_diff_ms < 0) {
-        lag_ms += std::max(-time_diff_ms, 0);
+        lag_ms += std::max(-time_diff_ms, 0.0f);
       }
     }
   }
 
   //Stop all music
   menu_music.stop();
-  level1_music.stop();
-  level2_music.stop();
+  scene.StopAllMusic();
   credits_music.stop();
   high_scores.Save(save_file);
+  game_settings.Save(settings_file);
 
 #ifdef _DEBUG
   system("pause");

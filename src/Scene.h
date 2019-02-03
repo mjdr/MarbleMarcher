@@ -30,15 +30,17 @@ public:
     MARBLE,
     GOAL,
     FINAL,
+    MIDPOINT
   };
 
-  Scene(sf::Music* m1, sf::Music* m2);
+  Scene(sf::Music* level_music);
 
   void LoadLevel(int level);
   void SetMarble(float x, float y, float z, float r);
   void SetFlag(float x, float y, float z);
   void SetMode(CamMode mode);
   void SetExposure(float e) { exposure = e; }
+  void EnbaleCheats() { enable_cheats = true; }
 
   const Eigen::Vector3f& GetMarble() const { return marble_pos; };
   float GetCamLook() const { return cam_look_x_smooth; }
@@ -49,7 +51,9 @@ public:
   sf::Vector3f GetGoalDirection() const;
   bool IsSinglePlay() const { return play_single; }
   bool IsHighScore() const;
-  bool IsFullRun() const { return is_fullrun; }
+  bool IsFullRun() const { return is_fullrun && !enable_cheats; }
+  bool IsFreeCamera() const { return free_camera; }
+  bool HasCheats() const { return enable_cheats; }
 
   sf::Music& GetCurMusic() const;
   void StopAllMusic();
@@ -58,6 +62,7 @@ public:
   void StartNextLevel();
   void StartSingle(int level);
   void ResetLevel();
+  void ResetCheats();
 
   void UpdateMarble(float dx=0.0f, float dy=0.0f);
   void UpdateCamera(float dx=0.0f, float dy=0.0f, float dz=0.0f, bool speedup=false);
@@ -71,7 +76,18 @@ public:
   Eigen::Vector3f NP(const Eigen::Vector3f& pt) const;
   bool MarbleCollision(float& delta_v);
 
+  void Cheat_ColorChange();
+  void Cheat_FreeCamera();
+  void Cheat_Gravity();
+  void Cheat_HyperSpeed();
+  void Cheat_IgnoreGoal();
+  void Cheat_Motion();
+  void Cheat_Planet();
+  void Cheat_Zoom();
+
 protected:
+  void SetLevel(int level);
+
   void UpdateIntro(bool ssaver);
   void UpdateOrbit();
   void UpdateDeOrbit(float dx, float dy, float dz);
@@ -82,6 +98,7 @@ protected:
 
 private:
   int             cur_level;
+  Level           level_copy;
   bool            is_fullrun;
   bool            intro_needs_snap;
   bool            play_single;
@@ -124,6 +141,13 @@ private:
   sf::Sound sound_shatter;
   sf::SoundBuffer buff_shatter;
 
-  sf::Music* music_1;
-  sf::Music* music_2;
+  sf::Music* music;
+
+  bool            enable_cheats;
+  bool            free_camera;
+  int             gravity_type;
+  bool            ignore_goal;
+  bool            hyper_speed;
+  bool            disable_motion;
+  bool            zoom_to_scale;
 };

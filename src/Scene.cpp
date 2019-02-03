@@ -39,7 +39,8 @@ static const float default_zoom = 15.0f;
 static const int fractal_iters = 16;
 static const float gravity = 0.005f;
 static const float ground_ratio = 1.15f;
-static const int mus_switch_lev = 9;
+static const int mus_switches[num_level_music] = {9, 15, 21, 24};
+static const int num_levels_midpoint = 15;
 
 static void ModPi(float& a, float b) {
   if (a - b > pi) {
@@ -49,7 +50,7 @@ static void ModPi(float& a, float b) {
   }
 }
 
-Scene::Scene(sf::Music* m1, sf::Music* m2) :
+Scene::Scene(sf::Music* level_music) :
   intro_needs_snap(true),
   play_single(false),
   is_fullrun(false),
@@ -67,9 +68,10 @@ Scene::Scene(sf::Music* m1, sf::Music* m2) :
   flag_pos(0.0f, 0.0f, 0.0f),
   timer(0),
   sum_time(0),
-  music_1(m1),
-  music_2(m2),
-  cur_level(0) {
+  music(level_music),
+  cur_level(0)
+{
+  ResetCheats();
   frac_params.setOnes();
   frac_params_smooth.setOnes();
   SnapCamera();
@@ -86,11 +88,11 @@ Scene::Scene(sf::Music* m1, sf::Music* m2) :
 }
 
 void Scene::LoadLevel(int level) {
-  cur_level = level;
-  marble_pos = all_levels[level].start_pos;
-  marble_rad = all_levels[level].marble_rad;
-  flag_pos = all_levels[level].end_pos;
-  cam_look_x = all_levels[level].start_look_x;
+  SetLevel(level);
+  marble_pos = level_copy.start_pos;
+  marble_rad = level_copy.marble_rad;
+  flag_pos = level_copy.end_pos;
+  cam_look_x = level_copy.start_look_x;
 }
 
 void Scene::SetMarble(float x, float y, float z, float r) {
@@ -101,6 +103,11 @@ void Scene::SetMarble(float x, float y, float z, float r) {
 
 void Scene::SetFlag(float x, float y, float z) {
   flag_pos = Eigen::Vector3f(x, y, z);
+}
+
+void Scene::SetLevel(int level) {
+  cur_level = level;
+  level_copy = all_levels[level];
 }
 
 void Scene::SetMode(CamMode mode) {
@@ -137,12 +144,18 @@ sf::Vector3f Scene::GetGoalDirection() const {
 }
 
 sf::Music& Scene::GetCurMusic() const {
-  return *(cur_level < mus_switch_lev ? music_1 : music_2);
+  for (int i = 0; i < num_level_music; ++i) {
+    if (cur_level < mus_switches[i]) {
+      return music[i];
+    }
+  }
+  return music[0];
 }
 
 void Scene::StopAllMusic() {
-  music_1->stop();
-  music_2->stop();
+  for (int i = 0; i < num_level_music; ++i) {
+    music[i].stop();
+  }
 }
 
 bool Scene::IsHighScore() const {
@@ -156,7 +169,8 @@ bool Scene::IsHighScore() const {
 void Scene::StartNewGame() {
   sum_time = 0;
   play_single = false;
-  cur_level = high_scores.GetStartLevel();
+  ResetCheats();
+  SetLevel(high_scores.GetStartLevel());
   is_fullrun = high_scores.HasCompleted(num_levels - 1);
   HideObjects();
   SetMode(ORBIT);
@@ -166,15 +180,19 @@ void Scene::StartNextLevel() {
   if (play_single) {
     cam_mode = MARBLE;
     ResetLevel();
+  } else if (cur_level + 1 == num_levels_midpoint && cam_mode != MIDPOINT) {
+    cam_mode = MIDPOINT;
   } else if (cur_level + 1 >= num_levels) {
     cam_mode = FINAL;
   } else {
-    cur_level += 1;
+    SetLevel(cur_level + 1);
     HideObjects();
     SetMode(ORBIT);
-    if (cur_level == mus_switch_lev) {
-      music_1->stop();
-      music_2->play();
+    for (int i = 0; i < num_level_music; ++i) {
+      if (cur_level == mus_switches[i]) {
+        StopAllMusic();
+        GetCurMusic().play();
+      }
     }
   }
 }
@@ -182,7 +200,8 @@ void Scene::StartNextLevel() {
 void Scene::StartSingle(int level) {
   play_single = true;
   is_fullrun = false;
-  cur_level = level;
+  ResetCheats();
+  SetLevel(level);
   HideObjects();
   SetMode(ORBIT);
 }
@@ -191,14 +210,14 @@ void Scene::ResetLevel() {
   if (cam_mode == MARBLE || play_single) {
     SetMode(DEORBIT);
     timer = frame_deorbit;
-    frac_params = all_levels[cur_level].params;
+    frac_params = level_copy.params;
     frac_params_smooth = frac_params;
-    marble_pos = all_levels[cur_level].start_pos;
+    marble_pos = level_copy.start_pos;
     marble_vel.setZero();
-    marble_rad = all_levels[cur_level].marble_rad;
+    marble_rad = level_copy.marble_rad;
     marble_mat.setIdentity();
-    flag_pos = all_levels[cur_level].end_pos;
-    cam_look_x = all_levels[cur_level].start_look_x;
+    flag_pos = level_copy.end_pos;
+    cam_look_x = level_copy.start_look_x;
     cam_look_x_smooth = cam_look_x;
     cam_pos = cam_pos_smooth;
     cam_dist = default_zoom;
@@ -206,6 +225,16 @@ void Scene::ResetLevel() {
     cam_look_y = -0.3f;
     cam_look_y_smooth = cam_look_y;
   }
+}
+
+void Scene::ResetCheats() {
+  enable_cheats = false;
+  free_camera = false;
+  gravity_type = 0;
+  ignore_goal = false;
+  hyper_speed = false;
+  disable_motion = false;
+  zoom_to_scale = false;
 }
 
 void Scene::UpdateCamera(float dx, float dy, float dz, bool speedup) {
@@ -231,7 +260,7 @@ void Scene::UpdateCamera(float dx, float dy, float dz, bool speedup) {
     }
   } else if (cam_mode == MARBLE) {
     UpdateNormal(dx, dy, dz);
-  } else if (cam_mode == GOAL || cam_mode == FINAL) {
+  } else if (cam_mode == GOAL || cam_mode == FINAL || cam_mode == MIDPOINT) {
     for (int i = 0; i < iters; i++) {
       UpdateGoal();
       if (cam_mode != GOAL) {
@@ -255,49 +284,60 @@ void Scene::UpdateMarble(float dx, float dy) {
     dy /= mag;
   }
 
-  //Apply all physics (gravity and collision)
-  bool onGround = false;
-  float max_delta_v = 0.0f;
-  for (int i = 0; i < num_phys_steps; ++i) {
-    const float force = marble_rad * gravity / num_phys_steps;
-    if (all_levels[cur_level].planet) {
-      marble_vel -= marble_pos.normalized() * force;
-    } else {
-      marble_vel.y() -= force;
+  if (free_camera) {
+    cam_pos += cam_mat.block<3,1>(0,2) * (-marble_rad * dy * 0.5f);
+    cam_pos += cam_mat.block<3, 1>(0,0) * (marble_rad * dx * 0.5f);
+    cam_pos_smooth = cam_pos_smooth*0.8f + cam_pos*0.2f;
+  } else {
+    //Apply all physics (gravity and collision)
+    bool onGround = false;
+    float max_delta_v = 0.0f;
+    for (int i = 0; i < num_phys_steps; ++i) {
+      float force = marble_rad * gravity / num_phys_steps;
+      if (gravity_type == 1) { force *= 0.25f; } else if (gravity_type == 2) { force *= 4.0f; }
+      if (level_copy.planet) {
+        marble_vel -= marble_pos.normalized() * force;
+      } else {
+        marble_vel.y() -= force;
+      }
+      marble_pos += marble_vel / num_phys_steps;
+      onGround |= MarbleCollision(max_delta_v);
     }
-    marble_pos += marble_vel / num_phys_steps;
-    onGround |= MarbleCollision(max_delta_v);
+
+    //Play bounce sound if needed
+    float bounce_delta_v = max_delta_v / marble_rad;
+    if (bounce_delta_v > 0.5f) {
+      sound_bounce1.play();
+    } else if (bounce_delta_v > 0.25f) {
+      sound_bounce2.play();
+    } else if (bounce_delta_v > 0.1f) {
+      sound_bounce3.setVolume(100.0f * (bounce_delta_v / 0.25f));
+      sound_bounce3.play();
+    }
+
+    //Add force from keyboard
+    float f = marble_rad * (onGround ? ground_force : air_force);
+    if (hyper_speed) { f *= 4.0f; }
+    const float cs = std::cos(cam_look_x);
+    const float sn = std::sin(cam_look_x);
+    const Eigen::Vector3f v(dx*cs - dy*sn, 0.0f, -dy*cs - dx*sn);
+    marble_vel += (marble_mat * v) * f;
+
+    //Apply friction
+    marble_vel *= (onGround ? ground_friction : air_friction);
   }
-
-  //Play bounce sound if needed
-  if (max_delta_v > 0.01f) {
-    sound_bounce1.play();
-  } else if (max_delta_v > 0.005f) {
-    sound_bounce2.play();
-  } else if (max_delta_v > 0.002f) {
-    sound_bounce3.setVolume(100.0f * (max_delta_v / 0.005f));
-    sound_bounce3.play();
-  }
-
-  //Add force from keyboard
-  const float f = marble_rad * (onGround ? ground_force : air_force);
-  const float cs = std::cos(cam_look_x);
-  const float sn = std::sin(cam_look_x);
-  Eigen::Vector3f v(dx*cs - dy*sn, 0.0f, -dy*cs - dx*sn);
-  marble_vel += (marble_mat * v) * f;
-
-  //Apply friction
-  marble_vel *= (onGround ? ground_friction : air_friction);
 
   //Update animated fractals
-  frac_params[1] = all_levels[cur_level].params[1] + all_levels[cur_level].anim_1 * std::sin(timer * 0.015f);
-  frac_params[2] = all_levels[cur_level].params[2] + all_levels[cur_level].anim_2 * std::sin(timer * 0.015f);
-  frac_params[4] = all_levels[cur_level].params[4] + all_levels[cur_level].anim_3 * std::sin(timer * 0.015f);
+  if (!disable_motion) {
+    frac_params[1] = level_copy.params[1] + level_copy.anim_1 * std::sin(timer * 0.015f);
+    frac_params[2] = level_copy.params[2] + level_copy.anim_2 * std::sin(timer * 0.015f);
+    frac_params[4] = level_copy.params[4] + level_copy.anim_3 * std::sin(timer * 0.015f);
+  }
   frac_params_smooth = frac_params;
 
   //Check if marble has hit flag post
-  if (cam_mode != GOAL) {
-    const bool flag_y_match = all_levels[cur_level].planet ?
+  if (cam_mode != GOAL && !ignore_goal) {
+    const bool flag_y_match = level_copy.planet ?
       marble_pos.y() <= flag_pos.y() && marble_pos.y() >= flag_pos.y() - 7*marble_rad :
       marble_pos.y() >= flag_pos.y() && marble_pos.y() <= flag_pos.y() + 7*marble_rad;
     if (flag_y_match) {
@@ -305,7 +345,9 @@ void Scene::UpdateMarble(float dx, float dy) {
       const float fz = marble_pos.z() - flag_pos.z();
       if (fx*fx + fz*fz < 6 * marble_rad*marble_rad) {
         final_time = timer;
-        high_scores.Update(cur_level, final_time);
+        if (!enable_cheats) {
+          high_scores.Update(cur_level, final_time);
+        }
         SetMode(GOAL);
         sound_goal.play();
       }
@@ -313,7 +355,7 @@ void Scene::UpdateMarble(float dx, float dy) {
   }
 
   //Check if marble passed the death barrier
-  if (marble_pos.y() < all_levels[cur_level].kill_y) {
+  if (marble_pos.y() < (enable_cheats ? -999.0f : level_copy.kill_y)) {
     ResetLevel();
   }
 }
@@ -375,7 +417,7 @@ void Scene::UpdateOrbit() {
   sum_time += 1;
 
   //Get marble location and rotational parameters
-  const float orbit_dist = all_levels[cur_level].orbit_dist;
+  const float orbit_dist = level_copy.orbit_dist;
   const Eigen::Vector3f orbit_pt(0.0f, orbit_dist, 0.0f);
   const Eigen::Vector3f perp_vec(std::sin(t), 0.0f, std::cos(t));
   cam_pos = orbit_pt + perp_vec * (orbit_dist * 2.5f);
@@ -396,20 +438,20 @@ void Scene::UpdateOrbit() {
   cam_mat.block<3, 1>(0, 3) = cam_pos_smooth;
 
   //Update fractal parameters
-  ModPi(frac_params[1], all_levels[cur_level].params[1]);
-  ModPi(frac_params[2], all_levels[cur_level].params[2]);
-  frac_params_smooth = frac_params * (1.0f - a) + all_levels[cur_level].params * a;
+  ModPi(frac_params[1], level_copy.params[1]);
+  ModPi(frac_params[2], level_copy.params[2]);
+  frac_params_smooth = frac_params * (1.0f - a) + level_copy.params * a;
 
   //When done transitioning display the marble and flag
   if (timer >= frame_transition) {
-    marble_pos = all_levels[cur_level].start_pos;
-    marble_rad = all_levels[cur_level].marble_rad;
-    flag_pos = all_levels[cur_level].end_pos;
+    marble_pos = level_copy.start_pos;
+    marble_rad = level_copy.marble_rad;
+    flag_pos = level_copy.end_pos;
   }
 
   //When done transitioning, setup level
   if (timer >= frame_orbit) {
-    frac_params = all_levels[cur_level].params;
+    frac_params = level_copy.params;
     cam_look_x = cam_look_x_smooth;
     cam_pos = cam_pos_smooth;
     cam_dist = default_zoom;
@@ -430,14 +472,14 @@ void Scene::UpdateDeOrbit(float dx, float dy, float dz) {
     UpdateCameraOnly(dx, dy, dz);
   } else {
     //Get marble location and rotational parameters
-    const float orbit_dist = all_levels[cur_level].orbit_dist;
+    const float orbit_dist = level_copy.orbit_dist;
     const Eigen::Vector3f orbit_pt(0.0f, orbit_dist, 0.0f);
     const Eigen::Vector3f perp_vec(std::sin(t), 0.0f, std::cos(t));
     const Eigen::Vector3f orbit_cam_pos = orbit_pt + perp_vec * (orbit_dist * 2.5f);
     cam_pos = cam_pos*orbit_smooth + orbit_cam_pos*(1 - orbit_smooth);
 
     //Solve for the look direction
-    const float start_look_x = all_levels[cur_level].start_look_x;
+    const float start_look_x = level_copy.start_look_x;
     cam_look_x = std::atan2(cam_pos.x(), cam_pos.z());
     ModPi(cam_look_x, start_look_x);
 
@@ -472,8 +514,14 @@ void Scene::UpdateDeOrbit(float dx, float dy, float dz) {
 
 void Scene::UpdateCameraOnly(float dx, float dy, float dz) {
   //Update camera zoom
-  cam_dist *= std::pow(2.0f, -dz);
-  cam_dist = std::min(std::max(cam_dist, 5.0f), 30.0f);
+  if (zoom_to_scale) {
+    level_copy.marble_rad *= std::pow(2.0f, -dz);
+    level_copy.marble_rad = std::min(std::max(level_copy.marble_rad, 0.0006f), 0.6f);
+    marble_rad = marble_rad*zoom_smooth + level_copy.marble_rad*(1 - zoom_smooth);
+  } else {
+    cam_dist *= std::pow(2.0f, -dz);
+    cam_dist = std::min(std::max(cam_dist, 5.0f), 30.0f);
+  }
   cam_dist_smooth = cam_dist_smooth*zoom_smooth + cam_dist*(1 - zoom_smooth);
 
   //Update look direction
@@ -489,7 +537,7 @@ void Scene::UpdateCameraOnly(float dx, float dy, float dz) {
   cam_look_y_smooth = cam_look_y_smooth*look_smooth + cam_look_y*(1 - look_smooth);
 
   //Setup rotation matrix for planets
-  if (all_levels[cur_level].planet) {
+  if (level_copy.planet) {
     marble_mat.col(1) = marble_pos.normalized();
     marble_mat.col(2) = -marble_mat.col(1).cross(marble_mat.col(0)).normalized();
     marble_mat.col(0) = -marble_mat.col(2).cross(marble_mat.col(1)).normalized();
@@ -499,9 +547,11 @@ void Scene::UpdateCameraOnly(float dx, float dy, float dz) {
 
   //Update the camera matrix
   MakeCameraRotation();
-  cam_pos = marble_pos + cam_mat.block<3, 3>(0, 0) * Eigen::Vector3f(0.0f, 0.0f, marble_rad * cam_dist_smooth);
-  cam_pos += marble_mat.col(1) * (marble_rad * cam_dist_smooth * 0.1f);
-  cam_pos_smooth = cam_pos;
+  if (!free_camera) {
+    cam_pos = marble_pos + cam_mat.block<3, 3>(0, 0) * Eigen::Vector3f(0.0f, 0.0f, marble_rad * cam_dist_smooth);
+    cam_pos += marble_mat.col(1) * (marble_rad * cam_dist_smooth * 0.1f);
+    cam_pos_smooth = cam_pos;
+  }
   cam_mat.block<3, 1>(0, 3) = cam_pos_smooth;
 }
 
@@ -519,7 +569,7 @@ void Scene::UpdateGoal() {
   const float t = timer * 0.01f;
   float a = std::min(t / 75.0f, 1.0f);
   timer += 1;
-  if (cur_level < num_levels - 1) {
+  if (cur_level != num_levels_midpoint - 1 && cur_level != num_levels - 1) {
     sum_time += 1;
   }
 
@@ -550,7 +600,7 @@ void Scene::UpdateGoal() {
     marble_vel *= 0.95f;
   }
 
-  if (timer > 300 && cam_mode != FINAL) {
+  if (timer > 300 && cam_mode != FINAL && cam_mode != MIDPOINT) {
     StartNextLevel();
   }
 }
@@ -578,11 +628,17 @@ void Scene::HideObjects() {
 void Scene::Write(sf::Shader& shader) const {
   shader.setUniform("iMat", sf::Glsl::Mat4(cam_mat.data()));
 
-  shader.setUniform("iMarblePos", sf::Glsl::Vec3(marble_pos.x(), marble_pos.y(), marble_pos.z()));
+  shader.setUniform("iMarblePos", free_camera ?
+    sf::Glsl::Vec3(999.0f, 999.0f, 999.0f) :
+    sf::Glsl::Vec3(marble_pos.x(), marble_pos.y(), marble_pos.z())
+  );
   shader.setUniform("iMarbleRad", marble_rad);
 
-  shader.setUniform("iFlagScale", all_levels[cur_level].planet ? -marble_rad : marble_rad);
-  shader.setUniform("iFlagPos", sf::Glsl::Vec3(flag_pos.x(), flag_pos.y(), flag_pos.z()));
+  shader.setUniform("iFlagScale", level_copy.planet ? -marble_rad : marble_rad);
+  shader.setUniform("iFlagPos", free_camera ?
+    sf::Glsl::Vec3(-999.0f, -999.0f, -999.0f) :
+    sf::Glsl::Vec3(flag_pos.x(), flag_pos.y(), flag_pos.z())
+  );
 
   shader.setUniform("iFracScale", frac_params_smooth[0]);
   shader.setUniform("iFracAng1", frac_params_smooth[1]);
@@ -747,4 +803,39 @@ bool Scene::MarbleCollision(float& delta_v) {
   marble_pos -= dn * marble_rad - d;
   marble_vel -= dn * (dv * marble_bounce);
   return true;
+}
+
+void Scene::Cheat_ColorChange() {
+  if (!enable_cheats) { return; }
+  level_copy.params[6] = frac_params_smooth[6] = frac_params[6] = float((rand() % 201) - 100) * 0.01f;
+  level_copy.params[7] = frac_params_smooth[7] = frac_params[7] = float((rand() % 201) - 100) * 0.01f;
+  level_copy.params[8] = frac_params_smooth[8] = frac_params[8] = float((rand() % 201) - 100) * 0.01f;
+}
+void Scene::Cheat_FreeCamera() {
+  if (!enable_cheats) { return; }
+  free_camera = !free_camera;
+}
+void Scene::Cheat_Gravity() {
+  if (!enable_cheats) { return; }
+  gravity_type = (gravity_type + 1) % 3;
+}
+void Scene::Cheat_HyperSpeed() {
+  if (!enable_cheats) { return; }
+  hyper_speed = !hyper_speed;
+}
+void Scene::Cheat_IgnoreGoal() {
+  if (!enable_cheats) { return; }
+  ignore_goal = !ignore_goal;
+}
+void Scene::Cheat_Motion() {
+  if (!enable_cheats) { return; }
+  disable_motion = !disable_motion;
+}
+void Scene::Cheat_Planet() {
+  if (!enable_cheats) { return; }
+  level_copy.planet = !level_copy.planet;
+}
+void Scene::Cheat_Zoom() {
+  if (!enable_cheats) { return; }
+  zoom_to_scale = !zoom_to_scale;
 }
